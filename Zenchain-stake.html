@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ZenChain Staking DApp + Tx Counter</title>
+  <script src="https://cdn.jsdelivr.net/npm/web3@1.6.1/dist/web3.min.js"></script>
+  <style>
+    body {
+      font-family: Tahoma, Arial, sans-serif;
+      background-color: #000;
+      color: white;
+      margin: 0;
+      padding: 0;
+    }
+    header {
+      background-color: #111;
+      padding: 20px;
+      text-align: center;
+      font-size: 28px;
+      font-weight: bold;
+      background: linear-gradient(to right, #FFD700, #32CD32); 
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    footer {
+      background-color: #111;
+      text-align: center;
+      padding: 10px;
+      position: fixed;
+      bottom: 0;
+      width: 100%;
+      color: #00FF00;
+      font-size: 12px;
+    }
+    .container {
+      padding: 30px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      flex-direction: column;
+    }
+    .input-box {
+      margin: 10px;
+      padding: 15px;
+      border-radius: 5px;
+      border: 1px solid #FFD700;
+      width: 100%;
+      max-width: 600px;
+      background-color: #1a1a1a;
+      box-shadow: 0 0 10px rgba(255, 215, 0, 0.3);
+    }
+    input[type="text"], input[type="number"] {
+      width: calc(100% - 20px);
+      padding: 10px;
+      margin-bottom: 15px;
+      border: 1px solid #32CD32;
+      border-radius: 4px;
+      background-color: #333;
+      color: white;
+      text-align: left;
+    }
+    button {
+      background: linear-gradient(to right, #32CD32, #FFD700);
+      color: black;
+      border: none;
+      padding: 12px 25px;
+      margin: 5px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+      font-weight: bold;
+      transition: opacity 0.3s;
+    }
+    button:hover {
+      opacity: 0.9;
+    }
+    .warning {
+        color: #FF6347;
+        margin-top: 20px;
+        text-align: center;
+        max-width: 700px;
+        border: 1px dashed #FF6347;
+        padding: 10px;
+        border-radius: 5px;
+        font-size: 14px;
+    }
+    .info-row { margin-top: 12px; }
+  </style>
+</head>
+<body>
+
+  <header>
+    ZenChain Staking DApp + Tx Counter
+  </header>
+
+  <div class="container">
+    <div class="input-box">
+        <button id="connectBtn" onclick="connectWallet()">Connect Wallet</button>
+        <hr style="border-color: #444; margin: 15px 0;">
+      
+        <label for="wallet-address" style="color:#FFD700;">Connected Wallet Address:</label>
+        <input type="text" id="wallet-address" value="" placeholder="Will appear here after connecting" readonly>
+
+        <label for="token-amount" style="color:#32CD32;">ZTC Amount to Stake/Unstake:</label>
+        <input type="number" id="token-amount" placeholder="Enter ZTC amount" required min="0.001">
+
+        <div style="display:flex; flex-wrap:wrap;">
+          <button onclick="stakeTokens()">Stake ZTC</button>
+          <button onclick="unstakeTokens()">Unstake ZTC</button>
+          <button onclick="registerOnChain()">Register On-Chain (increment counter)</button>
+          <button onclick="refreshCounts()">Refresh Counts</button>
+        </div>
+
+        <div class="info-row">
+          <strong>On-chain counter (contract):</strong> <span id="contract-count">-</span>
+        </div>
+        <div class="info-row">
+          <strong>Network tx count (nonce) for this wallet:</strong> <span id="network-count">-</span>
+        </div>
+        <div class="info-row">
+          <small style="color:#aaa">Note: "Network tx count" = number of transactions sent from this address (nonce). "Contract counter" = how many times this DApp called the counter contract for this address.</small>
+        </div>
+    </div>
+
+    <div class="warning">
+        **Important Notice:** This operation is on the **ZenChain Testnet**. To perform transactions, you must enable the ZenChain Testnet with **Chain ID 8408 (0x20d8)** in your wallet and have test ZTC tokens.
+    </div>
+  </div>
+
+  <footer>
+    @heliasayadi
+  </footer>
+
+  <script>
+    const TX_COUNTER_CONTRACT_ADDRESS = '0x291a036a5747763fc25d4e7282e93f29140df3e80aef704d47ada08c6daabe3e';
+    const STAKING_CONTRACT_ADDRESS = '0x0000000000000000000000000000000000000800';
+
+    const TX_COUNTER_ABI = [
+      {
+        "inputs": [],
+        "name": "registerTransaction",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+      },
+      {
+        "inputs": [
+          {"internalType":"address","name":"addr","type":"address"}
+        ],
+        "name":"getCount",
+        "outputs":[{"internalType":"uint256","name":"","type":"uint256"}],
+        "stateMutability":"view",
+        "type":"function"
+      }
+    ];
+
+    const STAKING_CONTRACT_ABI = [
+        {
+            "inputs": [
+                {"internalType": "uint256", "name": "value", "type": "uint256"},
+                {"internalType": "uint8", "name": "dest", "type": "uint8"}
+            ],
+            "name": "bondWithRewardDestination",
+            "outputs": [],
+            "stateMutability": "nonpayable",
+            "type": "function"
+        },
+        {
+            "inputs": [
+                {"internalType": "uint256", "name": "value", "type": "uint256"}
+            ],
+            "name": "unbond",
+            "outputs": [],
+            "stateMutability": "nonpayable",
+            "type": "function"
+        }
+    ];
+
+    let web3;
+    let userAccount;
+    const REQUIRED_CHAIN_ID_HEX = '0x20d8';
+
+    async function ensureOnZenChainTestnet() {
+      if (!window.ethereum) return false;
+      try {
+        const chainId = await ethereum.request({ method: 'eth_chainId' });
+        if (chainId !== REQUIRED_CHAIN_ID_HEX) {
+          try {
+            await ethereum.request({
+              method: 'wallet_switchEthereumChain',
+              params: [{ chainId: REQUIRED_CHAIN_ID_HEX }]
+            });
+            return true;
+          } catch (switchError) {
+            alert('Please switch MetaMask to ZenChain Testnet (Chain ID 8408).');
+            return false;
+          }
+        }
+        return true;
+      } catch (err) {
+        return false;
+      }
+    }
+
+    async function connectWallet() {
+      if (typeof window.ethereum !== 'undefined') {
+        web3 = new Web3(window.ethereum);
+        try {
+          const accounts = await ethereum.request({ method: 'eth_requestAccounts' });
+          userAccount = accounts[0];
+          document.getElementById('wallet-address').value = userAccount;
+          document.getElementById('connectBtn').innerText = 'Connected';
+
+          const ok = await ensureOnZenChainTestnet();
+          if (!ok) return;
+          await refreshCounts();
+        } catch (error) {
+          alert('Error connecting wallet.');
+        }
+      } else {
+        alert('Please install MetaMask.');
+      }
+    }
+
+    async function stakeTokens() {
+      const tokenAmount = document.getElementById('token-amount').value;
+      if (!tokenAmount || parseFloat(tokenAmount) <= 0) return alert('Enter valid amount');
+      try {
+          const amountInWei = web3.utils.toWei(tokenAmount, 'ether');
+          const stakingContract = new web3.eth.Contract(STAKING_CONTRACT_ABI, STAKING_CONTRACT_ADDRESS);
+          const receipt = await stakingContract.methods.bondWithRewardDestination(amountInWei, 0).send({
+              from: userAccount,
+              value: amountInWei
+          });
+          alert('Stake Tx: ' + receipt.transactionHash);
+          await refreshCounts();
+      } catch (error) { console.error(error); }
+    }
+
+    async function unstakeTokens() {
+      const tokenAmount = document.getElementById('token-amount').value;
+      if (!tokenAmount || parseFloat(tokenAmount) <= 0) return alert('Enter valid amount');
+      try {
+          const amountInWei = web3.utils.toWei(tokenAmount, 'ether');
+          const stakingContract = new web3.eth.Contract(STAKING_CONTRACT_ABI, STAKING_CONTRACT_ADDRESS);
+          const receipt = await stakingContract.methods.unbond(amountInWei).send({ from: userAccount });
+          alert('Unstake Tx: ' + receipt.transactionHash);
+          await refreshCounts();
+      } catch (error) { console.error(error); }
+    }
+
+    async function registerOnChain() {
+      if (!web3 || !userAccount) return alert('Connect wallet first.');
+      try {
+        const counterContract = new web3.eth.Contract(TX_COUNTER_ABI, TX_COUNTER_CONTRACT_ADDRESS);
+        const receipt = await counterContract.methods.registerTransaction().send({ from: userAccount });
+        alert('registerTransaction Tx: ' + receipt.transactionHash);
+        await refreshCounts();
+      } catch (err) { console.error(err); }
+    }
+
+    async function refreshCounts() {
+      if (!web3 || !userAccount) return;
+      try {
+        const txCount = await web3.eth.getTransactionCount(userAccount, 'latest');
+        document.getElementById('network-count').innerText = txCount;
+        const counterContract = new web3.eth.Contract(TX_COUNTER_ABI, TX_COUNTER_CONTRACT_ADDRESS);
+        const c = await counterContract.methods.getCount(userAccount).call();
+        document.getElementById('contract-count').innerText = c;
+      } catch (err) { console.error(err); }
+    }
+
+    if (window.ethereum) {
+      window.ethereum.on('accountsChanged', function (accounts) {
+        userAccount = accounts[0] || null;
+        document.getElementById('wallet-address').value = userAccount || '';
+        refreshCounts();
+      });
+      window.ethereum.on('chainChanged', () => setTimeout(() => location.reload(), 300));
+    }
+  </script>
+</body>
+</html>
